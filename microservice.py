@@ -105,6 +105,7 @@ class PeriodicUploader:
 
 def main():
     parser = argparse.ArgumentParser(description="Google Find Hub Sync")
+    parser.add_argument('--auth-token', default=os.getenv('AUTH_TOKEN_JSON'), help='')
     parser.add_argument('--push-url', default=os.getenv('PUSH_URL'))
     parser.add_argument('--headers' , default=os.getenv('CUSTOM_HEADERS'), help='Custom headers writtenen in "key1:value1,key2:value2" format')
     parser.add_argument('--device-mappings', default=os.getenv('DEVICE_MAPPINGS'), help='Transforms device IDs into custom ids "source1:target1,source2:target2" format')
@@ -112,15 +113,18 @@ def main():
     parser.add_argument('--accuracy-threshold-device', default=os.getenv('ACCURACY_THRESHOLD_DEVICE'), help='Device ID specific accuracy thresholds in "device1:threshold1,device2:threshold2" format')
     args = parser.parse_args()
 
+    if not args.auth_token:
+        parser.error('argument --auth-token or AUTH_TOKEN_JSON environment variable is required')
+
     if not args.push_url:
         parser.error('argument --push-url or PUSH_URL environment variable is required')
 
-    global API_TOKEN
+    os.environ['SECRETS_JSON'] = args.auth_token
+
     global PUSH_URL
     global CUSTOM_HEADERS
     global DEVICE_MAPPINGS
     global ACCURACY_THRESHOLDS
-    API_TOKEN = args.auth_token
     PUSH_URL = args.push_url
     DEVICE_MAPPINGS = dict(mapping.split(':') for mapping in args.device_mappings.split(',')) if args.device_mappings else {}
     CUSTOM_HEADERS = dict(header.split(':') for header in args.headers.split(',')) if args.headers else {}
