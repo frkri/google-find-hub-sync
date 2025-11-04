@@ -1,10 +1,8 @@
 import argparse
 import asyncio
 import threading
-import json
 import os
 import requests
-from flask import Flask, request, jsonify, abort
 
 from NovaApi.ListDevices.nbe_list_devices import request_device_list
 from ProtoDecoders.decoder import parse_device_list_protobuf, get_canonic_ids, parse_device_update_protobuf
@@ -14,67 +12,12 @@ from NovaApi.scopes import NOVA_ACTION_API_SCOPE
 from NovaApi.util import generate_random_uuid
 from Auth.fcm_receiver import FcmReceiver
 from NovaApi.ExecuteAction.LocateTracker.decrypt_locations import extract_locations
+from datetime import datetime
 
-app = Flask(__name__)
 API_TOKEN = None
 PUSH_URL = None
 periodic_jobs = {}
-PERSISTENCE_FILE = 'periodic_jobs.json'
 _fetch_location_lock = threading.Lock()
-
-
-def _load_jobs_from_disk():
-    try:
-        with open(PERSISTENCE_FILE, 'r') as f:
-            data = json.load(f)
-        return {str(k): float(v) for k, v in data.items()}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        return {}
-
-
-def _save_jobs_to_disk():
-    data = {device_id: job.interval for device_id, job in periodic_jobs.items()}
-    try:
-        with open(PERSISTENCE_FILE, 'w') as f:
-            json.dump(data, f)
-    except Exception:
-        pass
-
-
-def _restore_jobs():
-    jobs = _load_jobs_from_disk()
-    for device_id, interval in jobs.items():
-        try:
-            job = PeriodicUploader(device_id, interval)
-            periodic_jobs[device_id] = job
-            job.start()
-        except Exception:
-            pass
-    _save_jobs_to_disk()
-
-
-def _require_bearer_token():
-    auth_header = request.headers.get('Authorization', '')
-    scheme, _, token = auth_header.partition(' ')
-    if scheme.lower() != 'bearer' or not token or token != API_TOKEN:
-        abort(401, description='Invalid or missing bearer token')
-
-
-@app.before_request
-def before_request():
-    _require_bearer_token()
-
-
-@app.route('/devices', methods=['GET'])
-def list_devices():
-    result_hex = request_device_list()
-    device_list = parse_device_list_protobuf(result_hex)
-    canonic_ids = get_canonic_ids(device_list)
-    devices = [{'name': name, 'id': cid} for name, cid in canonic_ids]
-    return jsonify({'devices': devices})
-
 
 def _fetch_location(device_id, timeout=15):
     loop = asyncio.new_event_loop()
@@ -109,46 +52,31 @@ def _fetch_location(device_id, timeout=15):
 
     return extract_locations(result) if result else []
 
-
 def _get_latest_location(locations):
     with_coords = [l for l in locations if 'latitude' in l and 'longitude' in l]
     if not with_coords:
         return None
     return max(with_coords, key=lambda l: l.get('time', 0))
 
-
-@app.route('/devices/<device_id>/location', methods=['GET'])
-def get_device_location(device_id):
-    locations = _fetch_location(device_id)
-    return jsonify({'locations': locations})
-
-
 def _upload_location(device_id, location):
     if not PUSH_URL:
         raise RuntimeError('Push service URL not configured')
     if not location:
         raise RuntimeError('No valid location')
-    data = {
-        'id': device_id,
+    
+    params = {
+        'id': DEVICE_MAPPINGS.get(device_id, device_id),
         'lat': location['latitude'],
         'lon': location['longitude'],
-        'timestamp': location['time'],
+        'timestamp': int(location['time'] * 1000),  # Convert to milliseconds
+        'accuracy': location.get('accuracy', 0),
+        'altitude': location.get('altitude', 0),
     }
+    
     try:
-        requests.post(PUSH_URL, data=data, timeout=10)
+        requests.get(PUSH_URL, params=params, timeout=10, headers=CUSTOM_HEADERS)
     except Exception:
         pass
-
-
-@app.route('/devices/<device_id>/position-single', methods=['POST'])
-def push_position_single(device_id):
-    locations = _fetch_location(device_id)
-    location = _get_latest_location(locations)
-    if not location:
-        abort(404, description='No location available')
-    _upload_location(device_id, location)
-    return jsonify({'status': 'uploaded'})
-
 
 class PeriodicUploader:
     def __init__(self, device_id, interval):
@@ -176,57 +104,51 @@ class PeriodicUploader:
             if self._stop_event.wait(self.interval):
                 break
 
-
-@app.route('/devices/<device_id>/position-periodic', methods=['POST'])
-def start_periodic_upload(device_id):
-    try:
-        interval = float(request.args.get('interval', '0'))
-    except ValueError:
-        abort(400, description='Invalid interval')
-    if interval <= 0:
-        abort(400, description='Interval must be > 0')
-
-    old_job = periodic_jobs.pop(device_id, None)
-    if old_job:
-        old_job.stop()
-
-    new_job = PeriodicUploader(device_id, interval)
-    periodic_jobs[device_id] = new_job
-    new_job.start()
-    _save_jobs_to_disk()
-
-    return jsonify({'status': 'started', 'interval': interval})
-
-
-@app.route('/devices/<device_id>/position-stop', methods=['POST'])
-def stop_periodic_upload(device_id):
-    job = periodic_jobs.pop(device_id, None)
-    if job:
-        job.stop()
-        _save_jobs_to_disk()
-    return jsonify({'status': 'stopped'})
-
-
 def main():
     parser = argparse.ArgumentParser(description="Google Find Hub Sync")
     parser.add_argument('--auth-token', default=os.getenv('AUTH_TOKEN'))
-    parser.add_argument('--host', default=os.getenv('HOST', '0.0.0.0'))
-    parser.add_argument('--port', type=int, default=int(os.getenv('PORT', '5500')))
     parser.add_argument('--push-url', default=os.getenv('PUSH_URL'))
+    parser.add_argument('--headers' , default=os.getenv('CUSTOM_HEADERS'), help='Custom headers writtenen in "key1:value1,key2:value2" format')
+    parser.add_argument('--device-mappings', default=os.getenv('DEVICE_MAPPINGS'), help='Transforms device IDs into custom ids "source1:target1,source2:target2" format')
+    parser.add_argument('--interval', type=int, default=os.getenv('UPLOAD_INTERVAL', 300), help='Upload interval in seconds')
     args = parser.parse_args()
 
     if not args.auth_token:
         parser.error('argument --auth-token or AUTH_TOKEN environment variable is required')
 
+    if not args.push_url:
+        parser.error('argument --push-url or PUSH_URL environment variable is required')
+
     global API_TOKEN
     global PUSH_URL
+    global CUSTOM_HEADERS
+    global DEVICE_MAPPINGS
     API_TOKEN = args.auth_token
     PUSH_URL = args.push_url
+    DEVICE_MAPPINGS = dict(mapping.split(':') for mapping in args.device_mappings.split(',')) if args.device_mappings else {}
+    CUSTOM_HEADERS = dict(header.split(':') for header in args.headers.split(',')) if args.headers else {}
 
-    _restore_jobs()
+    print("Starting Google Find Hub Sync Microservice")
 
-    app.run(host=args.host, port=args.port)
+    # Add all device ids as jobs to restore periodic uploads
+    device_list_resp = request_device_list()
+    devices = parse_device_list_protobuf(device_list_resp)
+    device_ids = get_canonic_ids(devices)
 
+    for device in device_ids:
+        print(f"Setting up periodic upload for device: {device}")
+        if device not in periodic_jobs:
+            job = PeriodicUploader(device[1], args.interval)
+            periodic_jobs[device] = job
+            job.start()
+
+    try:
+        while True:
+            threading.Event().wait(timeout=1)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        for job in periodic_jobs.values():
+            job.stop()
 
 if __name__ == '__main__':
     main()
