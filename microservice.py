@@ -97,7 +97,7 @@ class PeriodicUploader:
             try:
                 locations = _fetch_location(self.device_id)
                 location = _get_latest_location(locations)
-                if location:
+                if location and (self.device_id not in ACCURACY_THRESHOLDS or location.get('accuracy', float('inf')) <= ACCURACY_THRESHOLDS[self.device_id]):
                     _upload_location(self.device_id, location)
             except Exception:
                 pass
@@ -111,6 +111,7 @@ def main():
     parser.add_argument('--headers' , default=os.getenv('CUSTOM_HEADERS'), help='Custom headers writtenen in "key1:value1,key2:value2" format')
     parser.add_argument('--device-mappings', default=os.getenv('DEVICE_MAPPINGS'), help='Transforms device IDs into custom ids "source1:target1,source2:target2" format')
     parser.add_argument('--interval', type=int, default=os.getenv('UPLOAD_INTERVAL', 300), help='Upload interval in seconds')
+    parser.add_argument('--accuracy-threshold-device', default=os.getenv('ACCURACY_THRESHOLD_DEVICE'), help='Device ID specific accuracy thresholds in "device1:threshold1,device2:threshold2" format')
     args = parser.parse_args()
 
     if not args.auth_token:
@@ -123,10 +124,13 @@ def main():
     global PUSH_URL
     global CUSTOM_HEADERS
     global DEVICE_MAPPINGS
+    global ACCURACY_THRESHOLDS
     API_TOKEN = args.auth_token
     PUSH_URL = args.push_url
     DEVICE_MAPPINGS = dict(mapping.split(':') for mapping in args.device_mappings.split(',')) if args.device_mappings else {}
     CUSTOM_HEADERS = dict(header.split(':') for header in args.headers.split(',')) if args.headers else {}
+    ACCURACY_THRESHOLDS = dict(threshold.split(':') for threshold in args.accuracy_threshold_device.split(',')) if args.accuracy_threshold_device else {}
+    ACCURACY_THRESHOLDS = {k: float(v) for k, v in ACCURACY_THRESHOLDS.items()}
 
     print("Starting Google Find Hub Sync Microservice")
 
