@@ -12,7 +12,6 @@ from NovaApi.scopes import NOVA_ACTION_API_SCOPE
 from NovaApi.util import generate_random_uuid
 from Auth.fcm_receiver import FcmReceiver
 from NovaApi.ExecuteAction.LocateTracker.decrypt_locations import extract_locations
-from datetime import datetime
 
 PUSH_URL = None
 periodic_jobs = {}
@@ -113,13 +112,9 @@ def main():
     parser.add_argument('--accuracy-threshold-device', default=os.getenv('ACCURACY_THRESHOLD_DEVICE'), help='Device ID specific accuracy thresholds in "device1:threshold1,device2:threshold2" format')
     args = parser.parse_args()
 
-    if not args.auth_token:
-        parser.error('argument --auth-token or AUTH_TOKEN_JSON environment variable is required')
-
     if not args.push_url:
         parser.error('argument --push-url or PUSH_URL environment variable is required')
 
-    os.environ['SECRETS_JSON'] = args.auth_token
 
     global PUSH_URL
     global CUSTOM_HEADERS

@@ -6,7 +6,7 @@
 import json
 import os
 
-SECRETS_ENV_VAR = 'SECRETS_JSON'
+SECRETS_FILE = os.getenv('SECRETS_FILE', 'secrets.json')
 
 def get_cached_value_or_set(name: str, generator: callable):
 
@@ -21,31 +21,36 @@ def get_cached_value_or_set(name: str, generator: callable):
 
 
 def get_cached_value(name: str):
-    secrets_data = _get_secrets_data()
-    
-    if secrets_data:
-        return secrets_data.get(name)
-    
+    secrets_file = _get_secrets_file()
+
+    if os.path.exists(secrets_file):
+        with open(secrets_file, 'r') as file:
+            try:
+                data = json.load(file)
+                value = data.get(name)
+                if value:
+                    return value
+            except json.JSONDecodeError:
+                return None
     return None
 
 
 def set_cached_value(name: str, value: str):
-    secrets_data = _get_secrets_data()
-    
-    if secrets_data is None:
-        secrets_data = {}
-    
-    secrets_data[name] = value
-    os.environ[SECRETS_ENV_VAR] = json.dumps(secrets_data)
+    secrets_file = _get_secrets_file()
+
+    if os.path.exists(secrets_file):
+        with open(secrets_file, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                raise Exception("Could not read secrets file. Aborting.")
+    else:
+        data = {}
+    data[name] = value
+    with open(secrets_file, 'w') as file:
+        json.dump(data, file)
 
 
-def _get_secrets_data():
-    secrets_json = os.environ.get(SECRETS_ENV_VAR)
-    
-    if not secrets_json:
-        return None
-    
-    try:
-        return json.loads(secrets_json)
-    except json.JSONDecodeError:
-        return None
+def _get_secrets_file():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(script_dir, SECRETS_FILE)
