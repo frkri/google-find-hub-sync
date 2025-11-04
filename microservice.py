@@ -14,7 +14,6 @@ from Auth.fcm_receiver import FcmReceiver
 from NovaApi.ExecuteAction.LocateTracker.decrypt_locations import extract_locations
 from datetime import datetime
 
-API_TOKEN = None
 PUSH_URL = None
 periodic_jobs = {}
 _fetch_location_lock = threading.Lock()
@@ -106,16 +105,12 @@ class PeriodicUploader:
 
 def main():
     parser = argparse.ArgumentParser(description="Google Find Hub Sync")
-    parser.add_argument('--auth-token', default=os.getenv('AUTH_TOKEN'))
     parser.add_argument('--push-url', default=os.getenv('PUSH_URL'))
     parser.add_argument('--headers' , default=os.getenv('CUSTOM_HEADERS'), help='Custom headers writtenen in "key1:value1,key2:value2" format')
     parser.add_argument('--device-mappings', default=os.getenv('DEVICE_MAPPINGS'), help='Transforms device IDs into custom ids "source1:target1,source2:target2" format')
     parser.add_argument('--interval', type=int, default=os.getenv('UPLOAD_INTERVAL', 300), help='Upload interval in seconds')
     parser.add_argument('--accuracy-threshold-device', default=os.getenv('ACCURACY_THRESHOLD_DEVICE'), help='Device ID specific accuracy thresholds in "device1:threshold1,device2:threshold2" format')
     args = parser.parse_args()
-
-    if not args.auth_token:
-        parser.error('argument --auth-token or AUTH_TOKEN environment variable is required')
 
     if not args.push_url:
         parser.error('argument --push-url or PUSH_URL environment variable is required')
